@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Solana Star Catcher</title>
+<style>
+  :root {
+    --purple: #9945FF;
+    --green: #14F195;
+    --bg: #0b0616;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: radial-gradient(ellipse at top, #1d0b3a 0%, var(--bg) 70%);
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    user-select: none; -webkit-user-select: none;
+    touch-action: manipulation;
+  }
+  #app { display: flex; flex-direction: column; height: 100%; max-width: 720px; margin: 0 auto; }
+  header {
+    padding: 12px 16px 10px;
+    text-align: center;
+    border-bottom: 2px solid transparent;
+    border-image: linear-gradient(90deg, var(--purple), var(--green)) 1;
+  }
+  h1 {
+    margin: 0 0 8px; font-size: clamp(22px, 6vw, 34px); letter-spacing: .5px;
+    background: linear-gradient(90deg, var(--purple), var(--green));
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+  }
+  .stats { display: flex; justify-content: center; gap: 12px; }
+  .stat {
+    flex: 1; max-width: 200px; padding: 6px 10px; border-radius: 12px;
+    background: rgba(153,69,255,.15); border: 1px solid rgba(153,69,255,.5);
+    font-size: 13px; color: #cbb3ff;
+  }
+  .stat b { display: block; font-size: 26px; color: var(--green); font-variant-numeric: tabular-nums; }
+  .stat.time.low b { color: #ff6b8b; }
+  #field { position: relative; flex: 1; overflow: hidden; cursor: crosshair; }
+  .star {
+    position: absolute; top: 0; left: 0; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; will-change: transform;
+    filter: drop-shadow(0 0 8px currentColor);
+  }
+  .star svg { width: 100%; height: 100%; display: block; }
+  .pop {
+    position: absolute; pointer-events: none; font-weight: 800; font-size: 22px;
+    color: var(--green); text-shadow: 0 0 8px var(--purple);
+    animation: pop .6s ease-out forwards;
+  }
+  @keyframes pop {
+    from { opacity: 1; transform: translate(-50%, -50%) scale(.8); }
+    to   { opacity: 0; transform: translate(-50%, -120px) scale(1.3); }
+  }
+  #overlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; text-align: center; padding: 24px;
+    background: rgba(11,6,22,.82); backdrop-filter: blur(4px); z-index: 10;
+  }
+  #overlay.hidden { display: none; }
+  #overlay h2 { margin: 0; font-size: clamp(24px, 7vw, 36px); color: var(--green); }
+  #overlay p { margin: 0; color: #d9c8ff; line-height: 1.6; }
+  #finalScore { font-size: 56px; font-weight: 800; color: var(--green); text-shadow: 0 0 18px var(--purple); }
+  #best { color: #cbb3ff; font-size: 15px; }
+  button {
+    font: inherit; font-size: 20px; font-weight: 700; color: #0b0616;
+    padding: 14px 40px; border: none; border-radius: 999px; cursor: pointer;
+    background: linear-gradient(90deg, var(--purple), var(--green));
+    box-shadow: 0 6px 24px rgba(153,69,255,.5);
+    transition: transform .1s;
+  }
+  button:active { transform: scale(.95); }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Solana Star Catcher</h1>
+    <div class="stats">
+      <div class="stat">スコア<b id="score">0</b></div>
+      <div class="stat time" id="timeBox">残り時間<b id="time">30</b></div>
+    </div>
+  </header>
+  <div id="field">
+    <div id="overlay">
+      <div id="startView">
+        <h2>星をキャッチ！</h2>
+        <p>落ちてくる星をタップ／クリック。<br>30秒でどれだけ集められるかな？<br>小さい星ほど高得点です。</p>
+      </div>
+      <div id="endView" style="display:none">
+        <h2>タイムアップ！</h2>
+        <div id="finalScore">0</div>
+        <div id="best"></div>
+      </div>
+      <button id="actionBtn">スタート</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const DURATION = 30;
+  const field = document.getElementById('field');
+  const overlay = document.getElementById('overlay');
+  const startView = document.getElementById('startView');
+  const endView = document.getElementById('endView');
+  const actionBtn = document.getElementById('actionBtn');
+  const scoreEl = document.getElementById('score');
+  const timeEl = document.getElementById('time');
+  const timeBox = document.getElementById('timeBox');
+  const finalScoreEl = document.getElementById('finalScore');
+  const bestEl = document.getElementById('best');
+
+  const COLORS = ['#9945FF', '#14F195', '#c79bff', '#7dfbc6'];
+  const STAR_SVG = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 1.5l3 7.1 7.7.6-5.9 5 1.8 7.5L12 17.7 5.4 21.7l1.8-7.5-5.9-5 7.7-.6z"/></svg>';
+
+  let stars = [];
+  let score = 0, best = 0;
+  let running = false;
+  let startTime = 0, lastFrame = 0, lastSpawn = 0;
+  let rafId = 0;
+
+  function setScore(v) { score = v; scoreEl.textContent = v; }
+
+  function spawn() {
+    const w = field.clientWidth;
+    const size = 34 + Math.random() * 40;           // 34〜74px
+    const el = document.createElement('div');
+    el.className = 'star';
+    el.style.width = el.style.height = size + 'px';
+    el.style.color = COLORS[(Math.random() * COLORS.length) | 0];
+    el.innerHTML = STAR_SVG;
+    const s = {
+      el, size,
+      x: Math.random() * (w - size),
+      y: -size,
+      vy: 120 + Math.random() * 160 + (74 - size) * 2,
+      rot: Math.random() * 360,
+      vr: (Math.random() - .5) * 180,
+      points: size < 46 ? 3 : size < 60 ? 2 : 1
+    };
+    const hit = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!running || s.dead) return;
+      catchStar(s, e);
+    };
+    el.addEventListener('pointerdown', hit);
+    field.appendChild(el);
+    stars.push(s);
+  }
+
+  function catchStar(s, e) {
+    s.dead = true;
+    setScore(score + s.points);
+    const r = field.getBoundingClientRect();
+    const pop = document.createElement('div');
+    pop.className = 'pop';
+    pop.textContent = '+' + s.points;
+    pop.style.left = (e.clientX - r.left) + 'px';
+    pop.style.top = (e.clientY - r.top) + 'px';
+    field.appendChild(pop);
+    setTimeout(() => pop.remove(), 600);
+    s.el.remove();
+  }
+
+  function clearStars() {
+    stars.forEach(s => s.el.remove());
+    stars = [];
+    field.querySelectorAll('.pop').forEach(p => p.remove());
+  }
+
+  function loop(now) {
+    if (!running) return;
+    const dt = Math.min((now - lastFrame) / 1000, 0.05);
+    lastFrame = now;
+    const elapsed = (now - startTime) / 1000;
+    const remain = Math.max(0, DURATION - elapsed);
+    const shown = Math.ceil(remain);
+    timeEl.textContent = shown;
+    timeBox.classList.toggle('low', shown <= 5);
+
+    // 時間経過とともに出現間隔を短くする
+    const interval = Math.max(280, 650 - elapsed * 12);
+    if (now - lastSpawn > interval) { spawn(); lastSpawn = now; }
+
+    const h = field.clientHeight;
+    stars = stars.filter(s => {
+      if (s.dead) return false;
+      s.y += s.vy * dt;
+      s.rot += s.vr * dt;
+      if (s.y > h) { s.el.remove(); return false; }
+      s.el.style.transform = `translate(${s.x}px, ${s.y}px) rotate(${s.rot}deg)`;
+      return true;
+    });
+
+    if (remain <= 0) { endGame(); return; }
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function startGame() {
+    clearStars();
+    setScore(0);
+    timeEl.textContent = DURATION;
+    timeBox.classList.remove('low');
+    overlay.classList.add('hidden');
+    running = true;
+    const now = performance.now();
+    startTime = lastFrame = lastSpawn = now;
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function endGame() {
+    running = false;
+    cancelAnimationFrame(rafId);
+    timeEl.textContent = 0;
+    clearStars();
+    if (score > best) best = score;
+    finalScoreEl.textContent = score;
+    bestEl.textContent = 'ベストスコア：' + best;
+    startView.style.display = 'none';
+    endView.style.display = 'block';
+    actionBtn.textContent = 'もう一度';
+    overlay.classList.remove('hidden');
+  }
+
+  actionBtn.addEventListener('click', startGame);
+})();
+</script>
+</body>
+</html>
